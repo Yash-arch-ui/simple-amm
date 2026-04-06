@@ -1,0 +1,404 @@
+//SPDX-License-Identifier:MIT
+pragma solidity ^0.8.19;
+import {SimpleAMM} from "../src/SimpleAMM.sol";
+import {MockERC20} from "../src/MockERC20.sol";
+import {Test,console} from "forge-std/Test.sol";
+import {Math} from "@openzeppelin/contracts/utils/math/Math.sol";
+
+
+contract SimpleAMMTest is Test{
+    MockERC20 token0;
+    MockERC20 token1;
+    SimpleAMM amm;
+    address user  = makeAddr("user");
+    address user2 = makeAddr("user2");
+
+    uint256 public constant minAmountOut = 0;
+
+    function setUp() public {
+        token0 = new MockERC20("Token0", "TK0");
+        token1 = new MockERC20("Token1", "TK1");
+        amm    = new SimpleAMM(address(token0), address(token1));
+
+        // FIX 1 — mint enough for all tests
+        token0.mint(user,  10000 ether);
+        token1.mint(user,  10000 ether);
+        token0.mint(user2, 10000 ether);
+        token1.mint(user2, 10000 ether);
+    }
+
+    function testAddLiquidity() public {
+        vm.startPrank(user);
+        token0.approve(address(amm), 500 ether);
+        token1.approve(address(amm), 50 ether);
+        amm.addLiquidity(500 ether, 50 ether);
+        vm.stopPrank();
+        assertEq(amm.reserve0(), 500 ether);
+        assertEq(amm.reserve1(), 50 ether);
+        assertEq(token0.balanceOf(user), 9500 ether);
+        assertEq(token1.balanceOf(user), 9950 ether);
+    }
+
+    function testSwap() public {
+        vm.startPrank(user);
+        token0.approve(address(amm), 500 ether);
+        token1.approve(address(amm), 50 ether);
+        amm.addLiquidity(500 ether, 50 ether);
+        vm.stopPrank();
+
+        vm.startPrank(user);
+        token0.approve(address(amm), 500 ether);
+        amm.swap(100 ether, address(token0), minAmountOut);
+        vm.stopPrank();
+
+        uint amountIn   = 100 ether;
+        uint reserveIn  = 500 ether;
+        uint reserveOut = 50 ether;
+        uint expectedOut = (amountIn * 997 * reserveOut) / (reserveIn * 1000 + amountIn * 997);
+
+        assertEq(token0.balanceOf(user), 9400 ether);
+        assertEq(token1.balanceOf(user), 9950 ether + expectedOut);
+        assertEq(amm.reserve0(), 600 ether);
+        assertEq(amm.reserve1(), 50 ether - expectedOut);
+    }
+
+    function testInvalidSwapZeroInput() public {
+        vm.startPrank(user);
+        token0.approve(address(amm), 500 ether);
+        token1.approve(address(amm), 50 ether);
+        amm.addLiquidity(500 ether, 50 ether);
+        vm.stopPrank();
+
+        vm.startPrank(user);
+        token1.approve(address(amm), 5 ether);
+        // FIX 2 — matches contract: require(amountIn > 0, "INVALID_AMOUNT")
+        vm.expectRevert("INVALID_AMOUNT");
+        amm.swap(0, address(token1), minAmountOut);
+        vm.stopPrank();
+    }
+
+    function testInvalidToken() public {
+        vm.startPrank(user);
+        token0.approve(address(amm), 500 ether);
+        token1.approve(address(amm), 50 ether);
+        amm.addLiquidity(500 ether, 50 ether);
+        vm.stopPrank();
+
+        vm.startPrank(user);
+        token0.approve(address(amm), 500 ether);
+        vm.expectRevert();
+        amm.swap(100 ether, address(0x123), minAmountOut);
+        vm.stopPrank();
+    }
+
+    function testWithoutAddingLiquidity() public {
+        vm.startPrank(user);
+        token0.approve(address(amm), 500 ether);
+        token1.approve(address(amm), 50 ether);
+        vm.expectRevert();
+        amm.swap(100 ether, address(token0), minAmountOut);
+        vm.stopPrank();
+    }
+
+    function testSwapLargeValues() public {
+        vm.startPrank(user);
+        token0.approve(address(amm), 1000 ether);
+        token1.approve(address(amm), 100 ether);
+        amm.addLiquidity(50 ether, 5 ether);
+        vm.stopPrank();
+
+        vm.startPrank(user);
+        token0.approve(address(amm), 950 ether);
+        amm.swap(950 ether, address(token0), minAmountOut);
+        console.log("Token0 in pool after large swap:", amm.reserve0());
+        console.log("Token1 in pool after large swap:", amm.reserve1());
+        vm.stopPrank();
+    }
+
+    function testFirstLiquidity() public {
+        vm.startPrank(user);
+        token0.approve(address(amm), 500 ether);
+        token1.approve(address(amm), 50 ether);
+        amm.addLiquidity(500 ether, 50 ether);
+        vm.stopPrank();
+
+        uint256 expectedLP = Math.sqrt(500 ether * 50 ether);
+        assertEq(amm.balanceOf(user), expectedLP);
+        assertGt(amm.balanceOf(user), 0);
+        assertEq(amm.reserve0(), 500 ether);
+        assertEq(amm.reserve1(), 50 ether);
+        console.log("Token0 in pool:", amm.reserve0());
+        console.log("Token1 in pool:", amm.reserve1());
+    }
+
+    function testLiquidtySecondTime() public {
+        vm.startPrank(user);
+        token0.approve(address(amm), 500 ether);
+        token1.approve(address(amm), 50 ether);
+        amm.addLiquidity(500 ether, 50 ether);
+        vm.stopPrank();
+
+        uint256 totalSupplyBefore = amm.totalSupply();
+        uint256 reserve0Before    = amm.reserve0();
+        uint256 reserve1Before    = amm.reserve1();
+
+        uint256 expectedLPUser2 = Math.min(
+            (500 ether * totalSupplyBefore) / reserve0Before,
+            (50 ether  * totalSupplyBefore) / reserve1Before
+        );
+
+        vm.startPrank(user2);
+        token0.approve(address(amm), 500 ether);
+        token1.approve(address(amm), 50 ether);
+        amm.addLiquidity(500 ether, 50 ether);
+        vm.stopPrank();
+
+        assertEq(amm.balanceOf(user2), expectedLPUser2);
+        assertGt(amm.balanceOf(user2), 0);
+        assertEq(amm.reserve0(), 1000 ether);
+        assertEq(amm.reserve1(), 100 ether);
+        console.log("Token0 in pool after user2 adds liquidity:", amm.reserve0());
+        console.log("Token1 in pool after user2 adds liquidity:", amm.reserve1());
+    }
+
+    function testRemoveLiquidity() public {
+        vm.startPrank(user);
+        token0.approve(address(amm), 500 ether);
+        token1.approve(address(amm), 50 ether);
+        amm.addLiquidity(500 ether, 50 ether);
+        amm.approve(address(amm), amm.balanceOf(user));
+        amm.removeLiquidity(amm.balanceOf(user));
+
+        // user started with 10000 ether of each, deposited 500/50, got it all back
+        assertEq(token0.balanceOf(user), 10000 ether);
+        assertEq(token1.balanceOf(user), 10000 ether);
+        assertEq(amm.balanceOf(user), 0);
+        assertEq(amm.totalSupply(), 0);
+        assertEq(amm.reserve0(), 0);
+        assertEq(amm.reserve1(), 0);
+        vm.stopPrank();
+        console.log("LP balance after removing liquidity:", amm.balanceOf(user));
+    }
+
+    function testSwaptoken1Fortoken0() public {
+        vm.startPrank(user);
+        token0.approve(address(amm), 500 ether);
+        token1.approve(address(amm), 50 ether);
+        amm.addLiquidity(500 ether, 50 ether);
+        vm.stopPrank();
+
+        uint amountIn   = 10 ether;
+        uint reserveIn  = 50 ether;
+        uint reserveOut = 500 ether;
+        uint expectedOut = (amountIn * 997 * reserveOut) / (reserveIn * 1000 + amountIn * 997);
+
+        vm.startPrank(user);
+        token1.approve(address(amm), 10 ether);
+        amm.swap(10 ether, address(token1), minAmountOut);
+        vm.stopPrank();
+
+        assertEq(token1.balanceOf(user), 9940 ether);
+        assertEq(token0.balanceOf(user), 9500 ether + expectedOut);
+        assertEq(amm.reserve1(), 60 ether);
+        assertEq(amm.reserve0(), 500 ether - expectedOut);
+    }
+
+    function testRemoveLiquidityPartial() public {
+        vm.startPrank(user);
+        token0.approve(address(amm), 500 ether);
+        token1.approve(address(amm), 50 ether);
+        amm.addLiquidity(500 ether, 50 ether);
+
+        uint256 totalLP     = amm.balanceOf(user);
+        uint256 halfLP      = totalLP / 2;
+        uint256 totalSupply = amm.totalSupply();
+
+        uint256 expectedToken0Out = (halfLP * amm.reserve0()) / totalSupply;
+        uint256 expectedToken1Out = (halfLP * amm.reserve1()) / totalSupply;
+
+        amm.approve(address(amm), halfLP);
+        amm.removeLiquidity(halfLP);
+        vm.stopPrank();
+
+        assertEq(token0.balanceOf(user), 9500 ether + expectedToken0Out);
+        assertEq(token1.balanceOf(user), 9950 ether + expectedToken1Out);
+        assertEq(amm.balanceOf(user), totalLP - halfLP);
+        assertEq(amm.reserve0(), 500 ether - expectedToken0Out);
+        assertEq(amm.reserve1(), 50 ether - expectedToken1Out);
+        assertGt(amm.totalSupply(), 0);
+
+        console.log("LP remaining:", amm.balanceOf(user));
+        console.log("reserve0 after partial removal:", amm.reserve0());
+        console.log("reserve1 after partial removal:", amm.reserve1());
+    }
+
+    function testSwapAfterRemovingLiquidity() public {
+        vm.startPrank(user);
+        token0.approve(address(amm), 500 ether);
+        token1.approve(address(amm), 50 ether);
+        amm.addLiquidity(500 ether, 50 ether);
+        amm.approve(address(amm), amm.balanceOf(user));
+        amm.removeLiquidity(amm.balanceOf(user));
+
+        assertEq(amm.reserve0(), 0);
+        assertEq(amm.reserve1(), 0);
+
+        token0.approve(address(amm), 100 ether);
+        vm.expectRevert();
+        amm.swap(100 ether, address(token0), minAmountOut);
+        vm.stopPrank();
+    }
+
+    function testGetReserves() public {
+        vm.startPrank(user);
+        token0.approve(address(amm), 500 ether);
+        token1.approve(address(amm), 50 ether);
+        amm.addLiquidity(500 ether, 50 ether);
+        vm.stopPrank();
+
+        (uint r0, uint r1) = amm.getReserves();
+        assertEq(r0, 500 ether);
+        assertEq(r1, 50 ether);
+    }
+
+    function testAddLiquidityZeroLP() public {
+        vm.startPrank(user);
+        token0.approve(address(amm), 0);
+        token1.approve(address(amm), 0);
+        // FIX 3 — matches contract: require(lpAmount > 0, "INSUFFICIENT_LIQUIDITY")
+        vm.expectRevert("INSUFFICIENT_LIQUIDITY");
+        amm.addLiquidity(0, 0);
+        vm.stopPrank();
+    }
+
+    function testRemoveLiquidityZero() public {
+        vm.startPrank(user);
+        token0.approve(address(amm), 500 ether);
+        token1.approve(address(amm), 50 ether);
+        amm.addLiquidity(500 ether, 50 ether);
+        // FIX 4 — matches contract: require(lpAmount > 0, "INVALID_AMOUNT")
+        vm.expectRevert("INVALID_AMOUNT");
+        amm.removeLiquidity(0);
+        vm.stopPrank();
+    }
+
+    function testSandwichAttack() public {
+        address attacker = makeAddr("attacker");
+        address victim   = makeAddr("victim");
+
+        token0.mint(attacker, 1000 ether);
+        token1.mint(attacker, 1000 ether);
+        token0.mint(victim,   1000 ether);
+        token1.mint(victim,   1000 ether);
+
+        vm.startPrank(user);
+        token0.approve(address(amm), 100 ether);
+        token1.approve(address(amm), 100 ether);
+        amm.addLiquidity(100 ether, 100 ether);
+        vm.stopPrank();
+
+        vm.startPrank(victim);
+        token0.approve(address(amm), 100 ether);
+        uint256 victimToken1Before = token1.balanceOf(victim);
+        amm.swap(100 ether, address(token0), 0);
+        uint256 victimToken1After  = token1.balanceOf(victim);
+        uint256 normalOutput       = victimToken1After - victimToken1Before;
+        vm.stopPrank();
+
+        amm = new SimpleAMM(address(token0), address(token1));
+
+        vm.startPrank(user);
+        token0.approve(address(amm), 100 ether);
+        token1.approve(address(amm), 100 ether);
+        amm.addLiquidity(100 ether, 100 ether);
+        vm.stopPrank();
+
+        uint256 minAmountOut2 = (normalOutput * 99) / 100;
+
+        vm.startPrank(attacker);
+        token0.approve(address(amm), 500 ether);
+        amm.swap(500 ether, address(token0), 0);
+        vm.stopPrank();
+
+        vm.startPrank(victim);
+        token0.approve(address(amm), 100 ether);
+        vm.expectRevert();
+        amm.swap(100 ether, address(token0), minAmountOut2);
+        vm.stopPrank();
+    }
+
+    function testTWAP() public {
+        vm.startPrank(user);
+        token0.approve(address(amm), 500 ether);
+        token1.approve(address(amm), 50 ether);
+        amm.addLiquidity(500 ether, 50 ether);
+        vm.stopPrank();
+
+        vm.startPrank(user);
+        token0.approve(address(amm), 10 ether);
+        amm.swap(10 ether, address(token0), 0);
+        vm.stopPrank();
+
+        uint256 oldCumulative = amm.priceCumulative0();
+        uint256 oldTimestamp  = amm.blockTimestampLast();
+
+        vm.warp(block.timestamp + 1 hours);
+
+        vm.startPrank(user);
+        token0.approve(address(amm), 10 ether);
+        amm.swap(10 ether, address(token0), 0);
+        vm.stopPrank();
+
+        uint256 twap = amm.getTwap(oldCumulative, oldTimestamp);
+        assertGt(twap, 0);
+
+        console.log("TWAP (token1 per token0, 1e18 scaled):", twap);
+    }
+
+    function testTWAPRevertsIfNoTimeElapsed() public {
+        vm.startPrank(user);
+        token0.approve(address(amm), 500 ether);
+        token1.approve(address(amm), 50 ether);
+        amm.addLiquidity(500 ether, 50 ether);
+        vm.stopPrank();
+
+        uint256 oldCumulative = amm.priceCumulative0();
+        uint256 oldTimestamp  = amm.blockTimestampLast();
+
+        vm.expectRevert("INVALID_TIME");
+        amm.getTwap(oldCumulative, oldTimestamp);
+    }
+    function testpriceManipulation() public{
+       vm.startPrank(user);
+       token0.approve(address(amm), 500 ether);
+       token1.approve(address(amm), 50 ether);
+       amm.addLiquidity(500 ether, 50 ether);
+       vm.stopPrank();
+
+       vm.startPrank(user);
+       token0.approve(address(amm), 500 ether);
+       amm.swap(100 ether, address(token0), 0);
+       vm.stopPrank();
+
+       uint256 priceAfterFirstSwap = (amm.reserve1() * 1e18) / amm.reserve0();
+
+       uint256 oldCumulative= amm.priceCumulative0();
+       uint256 oldTimestamp= amm.blockTimestampLast();
+
+       vm.warp(block.timestamp + 2 hours);
+
+       vm.startPrank(user);
+       token0.approve(address(amm), 500 ether);
+       amm.swap(10 ether, address(token0), 0);
+       vm.stopPrank();
+       uint256 priceAfterSecondSwap = (amm.reserve1() * 1e18) / amm.reserve0();
+
+       uint256 twap= amm.getTwap(oldCumulative, oldTimestamp);
+         assertGt(twap,priceAfterSecondSwap);
+
+         console.log("Price after first swap:", priceAfterFirstSwap);
+            console.log("Price after second swap:", priceAfterSecondSwap);
+            console.log("TWAP:", twap);
+    }
+    
+}
