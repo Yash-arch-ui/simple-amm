@@ -1,6 +1,6 @@
 > Automated Market Maker
+“Uniswap V2–style Automated Market Maker built in Solidity with Factory–Router architecture, supporting liquidity provision, token swaps, and deterministic pair deployment via CREATE2.”
 
-A minimal Uniswap V2–style Automated Market Maker built in Solidity using a Factory → Pair → Router architecture. Supports liquidity provision, swaps, and deterministic pair deployment using CREATE2.
 
 
 Factory
