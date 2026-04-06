@@ -1,4 +1,5 @@
-> Simple AMM (Automated Market Maker)
+> Automated Market Maker
+
 A minimal Uniswap V2–style Automated Market Maker built in Solidity using a Factory → Pair → Router architecture. Supports liquidity provision, swaps, and deterministic pair deployment using CREATE2.
 
 
