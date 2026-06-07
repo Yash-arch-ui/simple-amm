@@ -31,7 +31,7 @@ library AMMLibrary {
         uint256 reserveOut
     ) internal pure returns (uint256 price) {
         require(reserveIn > 0, "No liquidity");
-        price = (reserveOut * 1e18) / reserveIn;   
+        price = (reserveOut * 1e18) / reserveIn;   // definition of spot price in constant product AMM
     }
     function getPriceImpact(
         uint256 amountIn,

@@ -13,6 +13,13 @@ contract SimpleAMM is ERC20 {
     uint256 public reserve1;
 
     uint256 private unlocked = 1;
+    
+    uint256 public price0CumulativeLast;
+    uint256 public price1CumulativeLast;
+    uint32 public blockTimestampLast;
+
+    event Sync(uint256 reserve0, uint256 reserve1);
+
 
     modifier lock() {
         require(unlocked == 1, "LOCKED");
@@ -47,8 +54,10 @@ contract SimpleAMM is ERC20 {
         require(lpAmount > 0, "Insufficient liquidity provided");
         _mint(msg.sender, lpAmount);
 
-        reserve0 = IERC20(token0).balanceOf(address(this));
-        reserve1 = IERC20(token1).balanceOf(address(this));
+        uint256 balance0 = IERC20(token0).balanceOf(address(this));
+        uint256 balance1 = IERC20(token1).balanceOf(address(this));
+
+        _update(balance0, balance1);
     }
 
     function swap(
@@ -76,8 +85,10 @@ contract SimpleAMM is ERC20 {
         amountOut = AMMLibrary.getAmountOut(amountIn, reserveIn, reserveOut);
         require(amountOut > 0, "Insufficient output amount");
         IERC20(tokenOut).transfer(msg.sender, amountOut);
-        reserve0 = IERC20(token0).balanceOf(address(this));
-        reserve1 = IERC20(token1).balanceOf(address(this));
+        uint256 balance0 = IERC20(token0).balanceOf(address(this));
+        uint256 balance1 = IERC20(token1).balanceOf(address(this));
+
+        _update(balance0, balance1);
     }
 
     function removeLiquidity(
@@ -99,8 +110,22 @@ contract SimpleAMM is ERC20 {
         IERC20(token0).transfer(msg.sender, amount0);
         IERC20(token1).transfer(msg.sender, amount1);
 
-        reserve0 = IERC20(token0).balanceOf(address(this));
-        reserve1 = IERC20(token1).balanceOf(address(this));
+        uint256 balance0 = IERC20(token0).balanceOf(address(this));
+        uint256 balance1 = IERC20(token1).balanceOf(address(this));
+        _update(balance0, balance1);
+    }
+    function _update(uint256 balance0, uint256 balance1) internal {
+        uint32 currentTimestamp= uint32(block.timestamp);
+        uint256 timeElapsed= currentTimestamp- blockTimestampLast;
+        if(timeElapsed > 0 && reserve0 > 0 && reserve1 > 0){
+            price0CumulativeLast += uint256((reserve1 *1e18)/ reserve0)*timeElapsed;// price0CumulativeLast += price0*timeElapsed;
+            price1CumulativeLast += uint256((reserve0 *1e18)/ reserve1)*timeElapsed;
+        }
+        blockTimestampLast= currentTimestamp;
+        reserve0=balance0;
+        reserve1=balance1;
+        emit Sync(reserve0, reserve1);
+
     }
 
     function getReserves() external view returns (uint256, uint256) {
