@@ -4,6 +4,7 @@ pragma solidity ^0.8.19;
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {ERC20}  from "@openzeppelin/contracts/token/ERC20/ERC20.sol";
 import {AMMLibrary} from "./AMMLibrary.sol";
+import {IUniswapV2Callee} from "./IUniswapV2Callee.sol";
 
 contract SimpleAMM is ERC20 {
 
@@ -19,6 +20,7 @@ contract SimpleAMM is ERC20 {
     uint32 public blockTimestampLast;
 
     event Sync(uint256 reserve0, uint256 reserve1);
+    event Swap(address indexed sender, uint256 amount0In, uint256 amount1In, uint256 amount0Out, uint256 amount1Out, address indexed to);
 
 
     modifier lock() {
@@ -89,6 +91,45 @@ contract SimpleAMM is ERC20 {
         uint256 balance1 = IERC20(token1).balanceOf(address(this));
 
         _update(balance0, balance1);
+    }
+
+    function swap(
+        uint256 amount0Out,
+        uint256 amount1Out,
+        address to,
+        bytes calldata data
+    ) external lock {
+        require(amount0Out > 0 || amount1Out > 0, "Insufficient output amount");
+        uint256 _reserve0 = reserve0;
+        uint256 _reserve1 = reserve1;
+        require(amount0Out < _reserve0 && amount1Out < _reserve1, "Insufficient liquidity");
+        require(to != token0 && to != token1, "Invalid to");
+        uint256 balance0;
+        uint256 balance1;
+        {
+            address _token0 = token0;
+            address _token1 = token1;
+            if (amount0Out > 0) IERC20(_token0).transfer(to, amount0Out);
+            if (amount1Out > 0) IERC20(_token1).transfer(to, amount1Out);
+            if (data.length > 0) {
+                IUniswapV2Callee(to).uniswapV2Call(msg.sender, amount0Out, amount1Out, data);
+            }
+            balance0 = IERC20(_token0).balanceOf(address(this));
+            balance1 = IERC20(_token1).balanceOf(address(this));
+        }
+        uint256 amount0In = balance0 > _reserve0 - amount0Out ? balance0 - (_reserve0 - amount0Out) : 0;
+        uint256 amount1In = balance1 > _reserve1 - amount1Out ? balance1 - (_reserve1 - amount1Out) : 0;
+        require(amount0In > 0 || amount1In > 0, "Insufficient input amount");
+        {
+            uint256 balance0Adjusted = balance0 * 1000 - amount0In * 3;
+            uint256 balance1Adjusted = balance1 * 1000 - amount1In * 3;
+            require(
+                balance0Adjusted * balance1Adjusted >= _reserve0 * _reserve1 * 1000 ** 2,
+                "K_CHECK"
+            );
+        }
+        _update(balance0, balance1);
+        emit Swap(msg.sender, amount0In, amount1In, amount0Out, amount1Out, to);
     }
 
     function removeLiquidity(
